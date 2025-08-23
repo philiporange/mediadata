@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mediadata"
+version = "0.1.0"
+description = "Media metadata management system based on torrent files"
+readme = "README.md"
+license = {text = "CC0-1.0"}
+authors = [
+    {name = "Philip Orange", email = "git@philiporange.com"}
+]
+maintainers = [
+    {name = "Philip Orange", email = "git@philiporange.com"}
+]
+keywords = ["media", "metadata", "torrent", "nfo", "tmdb", "kodi", "jellyfin"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia",
+    "Topic :: System :: Archiving",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "guessit>=3.8.0",
+    "requests>=2.25.0",
+    "colorama>=0.4.0",
+]
+
+[project.scripts]
+mediadata = "cli:main"
+
+[project.urls]
+Homepage = "https://github.com/philiporange/mediadata"
+Repository = "https://github.com/philiporange/mediadata"
+Issues = "https://github.com/philiporange/mediadata/issues"
+
+[tool.setuptools.packages.find]
+include = ["src*", "*.py"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src", "."]
+omit = ["tests/*", "setup.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+]
