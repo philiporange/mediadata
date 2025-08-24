@@ -576,19 +576,204 @@ Represents a logical set of items (movies, seasons, books, audiobooks, albums).
 
 ---
 
-## 11) Roadmap & Extensibility
+## Metadata File Naming Specification v2
 
-* **Schemas**: publish JSON-Schema for the canonical JSON model and a compact XSD/RELAX NG for the XML vocabulary in this plan.
-* **Exporters**: build exporters for: Kodi-minimal NFO, Calibre OPF (books), Audiobookshelf JSON (audiobooks).
-* **Linter**: command-line validator that enforces cardinality, dates, and best-practices; emits actionable fixes.
-* **Bridges**: optional migration scripts to fan-out flat audiobooks into `Author/Series/Title/` virtual trees without moving original payloads.
+### Core Principles
 
----
+1. **Deterministic**: Same input always produces same metadata filename
+2. **Collision-free**: Guarantees unique names even with duplicate filenames
+3. **Reversible**: Can determine which media file a metadata file belongs to
+4. **Filesystem-safe**: Works across all major filesystems
+5. **Human-parseable**: Remains somewhat readable for debugging
 
-### TL;DR
+### Naming Structure
 
-* Keep immutable payloads under `data/`, archive **all** metadata sources in `metadata/`, and surface **one** consumable NFO per item in `data/` when interoperability is needed.
-* Use the XML elements above: they are Kodi/Jellyfin-compatible where those apps have definitions, and cleanly extended (book, audiobook, collection) where they don’t.
-* Support both **repeatable flat tags** and a **rich `<contributors>`** block to handle multiple authors/narrators/editors with roles—then flatten as needed for interop.
+```
+/archive/<infohash>/
+  ├── data/                    # immutable payload
+  │   └── [torrent contents]
+  └── metadata/
+      ├── _torrent.source.nfo  # torrent-level metadata
+      ├── _index.json          # metadata index/manifest
+      └── items/               # per-file metadata
+          └── <hash8>_<sanitized_name>.source.ext
+```
 
-If you want, I can also produce a **compact XSD** you can drop into CI to validate every NFO at ingest.
+### The Three-Tier System
+
+#### 1. Torrent-Level Metadata
+Files prefixed with `_` are torrent-level:
+- `_torrent.tmdb.nfo` - metadata for the entire torrent
+- `_collection.manual.nfo` - when torrent is treated as collection
+- `_index.json` - manifest mapping files to metadata
+
+#### 2. Single-Entity Torrents
+When torrent contains one logical entity (most movies, single-book torrents):
+- Use simplified names in `metadata/` root
+- `movie.tmdb.nfo`, `book.goodreads.nfo`, etc.
+- Detected by: single video file, or single book file, or explicit `_index.json` declaration
+
+#### 3. Multi-Entity Torrents (your 1000 epub case)
+Use the `items/` subdirectory with collision-resistant naming:
+
+```python
+def generate_metadata_filename(relative_path: str, source: str, ext: str) -> str:
+    """
+    Generate collision-free metadata filename.
+
+    Args:
+        relative_path: Path relative to torrent root (e.g., "books/sci-fi/foundation.epub")
+        source: Metadata source (e.g., "goodreads", "manual")
+        ext: Extension (e.g., "nfo", "json")
+
+    Returns:
+        Metadata filename like "a3f2c891_foundation.goodreads.nfo"
+    """
+    # Generate stable hash from full path
+    path_hash = hashlib.sha256(relative_path.encode('utf-8')).hexdigest()[:8]
+
+    # Extract and sanitize the filename
+    filename = Path(relative_path).stem
+    sanitized = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)[:50]  # Limit length
+
+    return f"items/{path_hash}_{sanitized}.{source}.{ext}"
+```
+
+### The Index Manifest
+
+The `_index.json` file maps between torrent files and their metadata:
+
+```json
+{
+  "version": "2.0",
+  "type": "multi",  // or "single"
+  "items": [
+    {
+      "path": "books/sci-fi/foundation.epub",
+      "hash": "a3f2c891",
+      "metadata": {
+        "goodreads": "items/a3f2c891_foundation.goodreads.nfo",
+        "manual": "items/a3f2c891_foundation.manual.json"
+      }
+    },
+    {
+      "path": "books/sci-fi/extras/foundation.epub",  // Same filename, different path
+      "hash": "b7d4e2a5",
+      "metadata": {
+        "goodreads": "items/b7d4e2a5_foundation.goodreads.nfo"
+      }
+    }
+  ]
+}
+```
+
+### Implementation Details
+
+#### Path Resolution Algorithm
+
+```python
+class MetadataResolver:
+    def resolve_metadata_path(self, torrent_path: Path, file_path: str, source: str) -> Path:
+        """Resolve metadata file path for a given torrent file."""
+
+        index_file = torrent_path / 'metadata' / '_index.json'
+
+        # Check if index exists
+        if index_file.exists():
+            index = json.loads(index_file.read_text())
+
+            if index['type'] == 'single':
+                # Simple naming for single-entity torrents
+                media_type = self._detect_media_type(file_path)
+                return torrent_path / 'metadata' / f'{media_type}.{source}.nfo'
+
+            else:  # multi
+                # Use hash-based naming
+                path_hash = hashlib.sha256(file_path.encode()).hexdigest()[:8]
+                stem = Path(file_path).stem
+                sanitized = self._sanitize_filename(stem)[:50]
+                return torrent_path / 'metadata' / 'items' / f'{path_hash}_{sanitized}.{source}.nfo'
+
+        else:
+            # Auto-detect based on torrent contents
+            return self._auto_detect_naming(torrent_path, file_path, source)
+```
+
+#### Collision Example
+
+Given a torrent with:
+```
+data/
+  ├── classics/
+  │   └── pride_and_prejudice.epub
+  └── romance/
+      └── pride_and_prejudice.epub  # Same name, different book
+```
+
+Generates metadata as:
+```
+metadata/
+  ├── _index.json
+  └── items/
+      ├── 3a8f2c91_pride_and_prejudice.goodreads.nfo  # classics version
+      └── 7b2d4ea5_pride_and_prejudice.goodreads.nfo  # romance version
+```
+
+### Special Cases
+
+#### 1. Season Packs (TV)
+```
+metadata/
+  ├── _torrent.tmdb.nfo          # series-level
+  └── items/
+      ├── 2a3b4c5d_s01e01.tmdb.nfo
+      ├── 3b4c5d6e_s01e02.tmdb.nfo
+      └── ...
+```
+
+#### 2. Discographies (Music)
+```
+metadata/
+  ├── _artist.musicbrainz.nfo
+  └── items/
+      ├── albums/
+      │   ├── 4c5d6e7f_album1.musicbrainz.nfo
+      │   └── 5d6e7f8g_album2.musicbrainz.nfo
+      └── tracks/
+          └── [track-level metadata if needed]
+```
+
+#### 3. Nested Collections
+For torrents containing multiple complete works:
+```
+metadata/
+  ├── _collection.manual.nfo
+  └── items/
+      ├── 6e7f8a9b_harry_potter_1.tmdb.nfo
+      ├── 7f8a9b0c_harry_potter_2.tmdb.nfo
+      └── ...
+```
+
+### Migration Path
+
+For existing libraries, provide a migration tool:
+
+```python
+def migrate_metadata_v1_to_v2(torrent_path: Path):
+    """Migrate from simple naming to collision-resistant naming."""
+    # 1. Scan existing metadata files
+    # 2. Determine if multi-entity torrent
+    # 3. Generate _index.json
+    # 4. Move files to items/ with new names if needed
+    # 5. Update any internal references
+```
+
+### Benefits
+
+1. **Handles edge cases**: 1000 epubs with potential collisions work perfectly
+2. **Progressive enhancement**: Simple cases stay simple, complex cases are handled
+3. **Debuggable**: Hash prefix + sanitized name makes files identifiable
+4. **Extensible**: New metadata sources just follow the pattern
+5. **Tooling-friendly**: The index makes it easy to build tools that understand the structure
+
+This specification scales from simple single-movie torrents to complex thousand-file ebook collections while maintaining consistency and preventing collisions.
