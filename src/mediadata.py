@@ -35,24 +35,25 @@ from datetime import datetime
 import time
 
 # Import all the functionality from our modules
-from src.scan import TorrentScanner, TorrentMatch, create_scan_report
-from src.organize import (
+from .scan import TorrentScanner, TorrentMatch, create_scan_report
+from .organize import (
     LibraryOrganizer, 
     OrganizeAction, 
     CollisionStrategy, 
     OrganizeResult,
     create_organize_report
 )
-from src.metadata import (
+from .metadata import (
     MetadataProcessor,
     TMDBClient,
+    GoodreadsClient,
     MediaIdentifier,
     MetadataResult,
     setup_metadata_logging,
     process_torrents_metadata
 )
-from src.utils import scan_torrent_files, get_torrent_info
-from config.config import Config
+from .utils import scan_torrent_files, get_torrent_info
+from .config.config import config
 
 
 @dataclass
@@ -115,6 +116,7 @@ class MediaData:
     def __init__(self, 
                  archive_dir: Union[str, Path],
                  tmdb_api_key: Optional[str] = None,
+                 goodreads_cache_expire: int = 3600,
                  verify_hashes: bool = False,
                  organize_action: OrganizeAction = OrganizeAction.MOVE,
                  collision_strategy: CollisionStrategy = CollisionStrategy.COMPARE,
@@ -125,6 +127,7 @@ class MediaData:
         Args:
             archive_dir: Directory where organized media library will be stored
             tmdb_api_key: TMDB API key (optional, can use TMDB_API_KEY env var)
+            goodreads_cache_expire: Cache expiration time in seconds for Goodreads
             verify_hashes: Whether to verify file integrity using torrent piece hashes
             organize_action: How to handle files (move, copy, symlink, hardlink)
             collision_strategy: How to handle file collisions
@@ -132,6 +135,7 @@ class MediaData:
         """
         self.archive_dir = Path(archive_dir)
         self.tmdb_api_key = tmdb_api_key
+        self.goodreads_cache_expire = goodreads_cache_expire
         self.verify_hashes = verify_hashes
         self.organize_action = organize_action
         self.collision_strategy = collision_strategy
@@ -154,7 +158,8 @@ class MediaData:
         )
         
         self.tmdb_client = TMDBClient(self.tmdb_api_key)
-        self.metadata_processor = MetadataProcessor(self.tmdb_client)
+        self.goodreads_client = GoodreadsClient(cache_expire=self.goodreads_cache_expire)
+        self.metadata_processor = MetadataProcessor(self.tmdb_client, self.goodreads_client)
         
         # Setup logging
         self.logger = self._setup_logging()
@@ -166,7 +171,8 @@ class MediaData:
             'organize_action': self.organize_action.value,
             'collision_strategy': self.collision_strategy.value,
             'max_workers': self.max_workers,
-            'tmdb_configured': bool(self.tmdb_api_key or os.environ.get('TMDB_API_KEY'))
+            'tmdb_configured': bool(self.tmdb_api_key or os.environ.get('TMDB_API_KEY')),
+            'goodreads_cache_expire': self.goodreads_cache_expire
         }
         
         self.logger.info(f"MediaData initialized with archive directory: {self.archive_dir}")
@@ -221,41 +227,96 @@ class MediaData:
         self.logger.info(f"Found {len(torrent_files)} torrent files")
         return torrent_files
     
+    
     def scan_and_match(self, 
-                      torrent_dir: Union[str, Path], 
-                      data_dir: Union[str, Path],
+                      folder_paths: List[Union[str, Path]],
                       progress_callback: Optional[Callable[[str, float], None]] = None) -> List[TorrentMatch]:
         """
-        Scan torrents and match them to data files.
+        Scan folders for torrents and match them to data files within the same folders.
+        Torrents are identified by .torrent extension.
         
         Args:
-            torrent_dir: Directory containing torrent files
-            data_dir: Directory containing media data files  
+            folder_paths: List of directories to scan for both torrents and media files
             progress_callback: Optional callback for progress updates
             
         Returns:
             List of TorrentMatch objects
         """
-        self.logger.info("Starting torrent scanning and matching")
+        self.logger.info(f"Starting unified folder scanning and matching for {len(folder_paths)} folders")
         
-        # Find torrents
-        torrent_files = self.scan_torrents(torrent_dir)
-        if not torrent_files:
-            self.logger.warning("No torrent files found")
+        # Collect all torrent files from all folders
+        all_torrent_files = []
+        for folder_path in folder_paths:
+            folder_torrents = self.scan_torrents(folder_path)
+            all_torrent_files.extend(folder_torrents)
+            self.logger.info(f"Found {len(folder_torrents)} torrents in {folder_path}")
+        
+        if not all_torrent_files:
+            self.logger.warning("No torrent files found in any folders")
             return []
         
-        # Match torrents to data
-        matches = self.scanner.scan_directory(
-            Path(data_dir), 
-            torrent_files, 
-            progress_callback
-        )
+        self.logger.info(f"Total torrents found: {len(all_torrent_files)}")
+        
+        # Match torrents against all folders
+        all_matches = []
+        total_folders = len(folder_paths)
+        
+        for i, folder_path in enumerate(folder_paths):
+            if progress_callback:
+                base_percent = (i / total_folders) * 90  # Reserve 10% for final processing
+                progress_callback(f"Scanning folder {i+1}/{total_folders}: {folder_path}", base_percent)
+            
+            # Match all torrents against this folder
+            folder_matches = self.scanner.scan_directory(
+                Path(folder_path), 
+                all_torrent_files, 
+                lambda msg, pct=0: progress_callback(f"{msg} in {Path(folder_path).name}", base_percent + pct/10) if progress_callback else None
+            )
+            all_matches.extend(folder_matches)
+        
+        # Remove duplicate matches (same torrent matched in multiple folders)
+        unique_matches = self._deduplicate_matches(all_matches)
         
         # Log results
-        complete_matches = [m for m in matches if m.complete]
-        self.logger.info(f"Matching complete: {len(complete_matches)}/{len(matches)} torrents matched")
+        complete_matches = [m for m in unique_matches if m.complete]
+        self.logger.info(f"Unified matching complete: {len(complete_matches)}/{len(unique_matches)} torrents matched")
         
-        return matches
+        if progress_callback:
+            progress_callback("Matching complete", 100)
+        
+        return unique_matches
+    
+    def _deduplicate_matches(self, matches: List[TorrentMatch]) -> List[TorrentMatch]:
+        """
+        Remove duplicate matches, preferring complete matches over partial ones.
+        
+        Args:
+            matches: List of potentially duplicate TorrentMatch objects
+            
+        Returns:
+            List of unique matches
+        """
+        # Group matches by info_hash
+        matches_by_hash = {}
+        for match in matches:
+            info_hash = match.info_hash
+            if info_hash not in matches_by_hash:
+                matches_by_hash[info_hash] = []
+            matches_by_hash[info_hash].append(match)
+        
+        # Select best match for each hash
+        unique_matches = []
+        for info_hash, match_list in matches_by_hash.items():
+            if len(match_list) == 1:
+                unique_matches.append(match_list[0])
+            else:
+                # Prefer complete matches, then matches with more files
+                best_match = max(match_list, key=lambda m: (m.complete, len(m.files)))
+                unique_matches.append(best_match)
+                
+                self.logger.debug(f"Deduplicated torrent {info_hash}: kept match with {len(best_match.files)} files (complete: {best_match.complete})")
+        
+        return unique_matches
     
     def organize_torrents(self, 
                          torrent_matches: List[TorrentMatch],
@@ -343,17 +404,15 @@ class MediaData:
         
         return metadata_results
     
-    def process_directory(self,
-                         torrent_dir: Union[str, Path],
-                         data_dir: Union[str, Path], 
-                         dry_run: bool = False,
-                         progress_callback: Optional[Callable[[str, float], None]] = None) -> ProcessingStats:
+    def process(self,
+               folder_paths: List[Union[str, Path]], 
+               dry_run: bool = False,
+               progress_callback: Optional[Callable[[str, float], None]] = None) -> ProcessingStats:
         """
-        Complete workflow: scan, match, organize, and fetch metadata.
+        Complete workflow: scan folders for torrents, match, organize, and fetch metadata.
         
         Args:
-            torrent_dir: Directory containing torrent files
-            data_dir: Directory containing media files
+            folder_paths: List of directories to scan for torrents and media files
             dry_run: If True, don't actually move files
             progress_callback: Optional callback for progress updates
             
@@ -363,7 +422,8 @@ class MediaData:
         start_time = time.time()
         
         self.logger.info("=" * 60)
-        self.logger.info("STARTING COMPLETE MEDIADATA PROCESSING WORKFLOW")
+        self.logger.info("STARTING COMPLETE MEDIADATA PROCESSING WORKFLOW (UNIFIED FOLDERS)")
+        self.logger.info(f"Folders to scan: {[str(p) for p in folder_paths]}")
         self.logger.info("=" * 60)
         
         stats = ProcessingStats()
@@ -374,9 +434,9 @@ class MediaData:
             self.logger.info(f"Progress: {message} ({percent:.1f}%)")
         
         try:
-            # Step 1: Scan and match
-            progress_wrapper("Scanning and matching torrents", 10)
-            matches = self.scan_and_match(torrent_dir, data_dir, progress_wrapper)
+            # Step 1: Scan and match using unified approach
+            progress_wrapper("Scanning folders for torrents and matching", 10)
+            matches = self.scan_and_match(folder_paths, progress_wrapper)
             
             stats.total_torrents_found = len(matches)
             stats.successful_matches = len([m for m in matches if m.complete])
@@ -492,22 +552,22 @@ class MediaData:
 
 
 # Convenience function for quick usage
-def process_media_directory(torrent_dir: Union[str, Path],
-                           data_dir: Union[str, Path], 
-                           archive_dir: Union[str, Path],
-                           tmdb_api_key: Optional[str] = None,
-                           dry_run: bool = False,
-                           verify_hashes: bool = False) -> ProcessingStats:
+def process_media(folder_paths: List[Union[str, Path]],
+                 archive_dir: Union[str, Path],
+                 tmdb_api_key: Optional[str] = None,
+                 dry_run: bool = False,
+                 verify_hashes: bool = False,
+                 organize_action: OrganizeAction = OrganizeAction.MOVE) -> ProcessingStats:
     """
     Convenience function for complete media processing workflow.
     
     Args:
-        torrent_dir: Directory containing torrent files  
-        data_dir: Directory containing media files
+        folder_paths: List of directories to scan for torrents and media files
         archive_dir: Directory where organized library will be created
         tmdb_api_key: TMDB API key (optional)
         dry_run: If True, don't actually move files
         verify_hashes: Whether to verify file integrity
+        organize_action: How to handle files (move, copy, symlink, hardlink)
         
     Returns:
         ProcessingStats with results
@@ -515,10 +575,10 @@ def process_media_directory(torrent_dir: Union[str, Path],
     with MediaData(
         archive_dir=archive_dir,
         tmdb_api_key=tmdb_api_key,
-        verify_hashes=verify_hashes
+        verify_hashes=verify_hashes,
+        organize_action=organize_action
     ) as media:
-        return media.process_directory(
-            torrent_dir=torrent_dir,
-            data_dir=data_dir,
+        return media.process(
+            folder_paths=folder_paths,
             dry_run=dry_run
         )

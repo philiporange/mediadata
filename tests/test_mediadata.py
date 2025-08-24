@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from mediadata import MediaData, ProcessingStats, process_media_directory
+from mediadata import MediaData, ProcessingStats, process_media
 from src.organize import OrganizeAction, CollisionStrategy
 
 
@@ -133,27 +133,32 @@ class TestMediaData:
         assert len(torrents) == 3
         assert all(t.suffix == '.torrent' for t in torrents)
     
+    
+    @patch('src.mediadata.MediaData.scan_torrents')
     @patch('mediadata.TorrentScanner.scan_directory')
-    def test_scan_and_match(self, mock_scan):
-        """Test scan and match functionality."""
+    def test_scan_and_match_unified(self, mock_scan, mock_scan_torrents):
+        """Test unified folder scan and match functionality."""
         media = self._create_temp_mediadata()
         
         # Mock scanner results
-        mock_matches = [Mock(complete=True), Mock(complete=False)]
+        mock_matches = [
+            Mock(complete=True, info_hash='hash1', files=['file1', 'file2']), 
+            Mock(complete=False, info_hash='hash2', files=['file3'])
+        ]
         mock_scan.return_value = mock_matches
+        mock_scan_torrents.return_value = [Path('test1.torrent'), Path('test2.torrent')]
         
         # Create test directories
-        torrent_dir = Path(self.temp_dir) / 'torrents'
-        data_dir = Path(self.temp_dir) / 'data'
-        torrent_dir.mkdir()
-        data_dir.mkdir()
-        (torrent_dir / 'test.torrent').touch()
+        folder1 = Path(self.temp_dir) / 'folder1'
+        folder2 = Path(self.temp_dir) / 'folder2'
+        folder1.mkdir()
+        folder2.mkdir()
         
-        # Test matching
-        matches = media.scan_and_match(torrent_dir, data_dir)
+        # Test unified folder matching
+        matches = media.scan_and_match([folder1, folder2])
         
         assert len(matches) == 2
-        mock_scan.assert_called_once()
+        mock_scan.assert_called()
     
     @patch('mediadata.LibraryOrganizer.organize_matches')
     def test_organize_torrents(self, mock_organize):
@@ -252,13 +257,12 @@ class TestMediaData:
 class TestConvenienceFunction:
     """Test convenience functions."""
     
-    def test_process_media_directory(self):
+    def test_process_media(self):
         """Test convenience function basic functionality."""
         with tempfile.TemporaryDirectory() as temp_dir:
             # Test convenience function with temp directory - should not crash
-            stats = process_media_directory(
-                torrent_dir=f'{temp_dir}/torrents',
-                data_dir=f'{temp_dir}/data',
+            stats = process_media(
+                folder_paths=[f'{temp_dir}/folder1', f'{temp_dir}/folder2'],
                 archive_dir=f'{temp_dir}/archive',
                 tmdb_api_key='test_key',
                 dry_run=True,

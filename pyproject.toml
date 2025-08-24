@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mediadata = "cli:main"
+mediadata = "src.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/philiporange/mediadata"

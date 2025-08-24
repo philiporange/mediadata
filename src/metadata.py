@@ -25,10 +25,11 @@ import requests
 from urllib.parse import quote
 
 from guessit import guessit
+from goodreads import Goodreads
 
 from .utils import read_nfo_file, write_nfo_file, find_nfo_files, extract_metadata_source
 from .scan import TorrentMatch
-from config.config import config
+from .config.config import config
 
 
 class MediaType(Enum):
@@ -84,8 +85,10 @@ class MetadataResult:
     """Result of metadata processing."""
     identification: Optional[MediaIdentification]
     tmdb_data: Optional[Dict[str, Any]] = None
+    goodreads_data: Optional[Dict[str, Any]] = None
     nfo_written: bool = False
     nfo_path: Optional[Path] = None
+    goodreads_nfo_path: Optional[Path] = None
     error: Optional[str] = None
     processing_time: float = 0.0
     
@@ -94,8 +97,10 @@ class MetadataResult:
         return {
             'identification': self.identification.to_dict() if self.identification else None,
             'tmdb_data_available': bool(self.tmdb_data),
+            'goodreads_data_available': bool(self.goodreads_data),
             'nfo_written': self.nfo_written,
             'nfo_path': str(self.nfo_path) if self.nfo_path else None,
+            'goodreads_nfo_path': str(self.goodreads_nfo_path) if self.goodreads_nfo_path else None,
             'error': self.error,
             'processing_time': self.processing_time
         }
@@ -119,6 +124,7 @@ class TMDBClient:
     def search_movie(self, title: str, year: Optional[int] = None) -> List[Dict[str, Any]]:
         """Search for movies by title and optional year."""
         if not self.api_key:
+            logging.warning(f"TMDB movie search skipped for '{title}' - no API key")
             return []
         
         params = {
@@ -130,11 +136,29 @@ class TMDBClient:
         if year:
             params['year'] = year
         
+        # DEBUG: Log what we're searching for
+        search_info = f"title='{title}'"
+        if year:
+            search_info += f", year={year}"
+        logging.info(f"🔍 TMDB Movie search: {search_info}")
+        
         try:
             response = self.session.get(f"{self.base_url}/search/movie", params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
-            return data.get('results', [])
+            results = data.get('results', [])
+            
+            # DEBUG: Log results
+            logging.info(f"📊 TMDB Movie search results for '{title}': {len(results)} found")
+            if results:
+                for i, result in enumerate(results[:3]):  # Show first 3 results
+                    result_title = result.get('title', 'Unknown')
+                    result_year = result.get('release_date', '')[:4] if result.get('release_date') else 'Unknown'
+                    logging.info(f"  {i+1}. '{result_title}' ({result_year}) - ID: {result.get('id')}")
+            else:
+                logging.warning(f"❌ No TMDB movie results found for '{title}'{f' ({year})' if year else ''}")
+            
+            return results
         except Exception as e:
             logging.error(f"TMDB movie search failed for '{title}': {e}")
             return []
@@ -220,6 +244,70 @@ class TMDBClient:
             return None
 
 
+class GoodreadsClient:
+    """Goodreads client for fetching book and audiobook metadata."""
+    
+    def __init__(self, cache_expire: int = 3600):
+        self.client = Goodreads(cache_expire=cache_expire)
+        self.logger = logging.getLogger(f"{__name__}.GoodreadsClient")
+    
+    def search_book(self, title: str, author: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Search for books by title and optional author."""
+        try:
+            # Construct search query
+            search_query = title
+            if author:
+                search_query = f"{title} by {author}"
+            
+            # Use the search method from goodreads library
+            results = self.client.search(search_query)
+            return results if isinstance(results, list) else []
+        except Exception as e:
+            self.logger.error(f"Goodreads book search failed for '{title}': {e}")
+            return []
+    
+    def search_book_detailed(self, title: str, author: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Search for a specific book and return detailed metadata."""
+        try:
+            # Construct search query
+            search_query = title
+            if author:
+                search_query = f"{title} by {author}"
+            
+            # Use the search_book method which returns detailed data
+            book_data = self.client.search_book(search_query)
+            return book_data
+        except Exception as e:
+            self.logger.error(f"Goodreads detailed search failed for '{title}': {e}")
+            return None
+    
+    def get_book_data(self, goodreads_url: str) -> Optional[Dict[str, Any]]:
+        """Get detailed book data from Goodreads URL."""
+        try:
+            book_data = self.client.get_data(goodreads_url)
+            return book_data
+        except Exception as e:
+            self.logger.error(f"Goodreads data fetch failed for URL '{goodreads_url}': {e}")
+            return None
+    
+    def get_reviews(self, goodreads_url: str) -> Optional[Dict[str, Any]]:
+        """Get reviews data for a book from Goodreads URL."""
+        try:
+            reviews_data = self.client.get_reviews(goodreads_url)
+            return reviews_data
+        except Exception as e:
+            self.logger.error(f"Goodreads reviews fetch failed for URL '{goodreads_url}': {e}")
+            return None
+    
+    def clear_cache(self) -> None:
+        """Clear the Goodreads client cache."""
+        try:
+            self.client.clear_cache()
+            self.logger.info("Goodreads cache cleared")
+        except Exception as e:
+            self.logger.error(f"Failed to clear Goodreads cache: {e}")
+
+
 class MediaIdentifier:
     """Identifies media content through hierarchical sources."""
     
@@ -251,35 +339,47 @@ class MediaIdentifier:
         Returns:
             MediaIdentification or None if identification fails
         """
+        logging.info(f"🎯 Starting hierarchical identification for: '{torrent_match.name}'")
+        
         # 1. Check existing NFO files in metadata directory
+        logging.info("📁 Step 1: Checking metadata NFO files...")
         identification = self._identify_from_metadata_nfos(metadata_dir)
         if identification:
-            self.logger.info(f"Identified from metadata NFO: {identification.title}")
+            self.logger.info(f"✅ Identified from metadata NFO: '{identification.title}' ({identification.year})")
             return identification
+        logging.info("❌ No identification from metadata NFO files")
         
         # 2. Check NFO files in data directory
+        logging.info("📁 Step 2: Checking data NFO files...")
         identification = self._identify_from_data_nfos(data_dir)
         if identification:
-            self.logger.info(f"Identified from data NFO: {identification.title}")
+            self.logger.info(f"✅ Identified from data NFO: '{identification.title}' ({identification.year})")
             return identification
+        logging.info("❌ No identification from data NFO files")
         
         # 3. Use torrent name
+        logging.info("🏷️ Step 3: Parsing torrent name...")
         identification = self._identify_from_torrent_name(torrent_match.name)
         if identification:
-            self.logger.info(f"Identified from torrent name: {identification.title}")
+            self.logger.info(f"✅ Identified from torrent name: '{identification.title}' ({identification.year})")
             return identification
+        logging.info("❌ No identification from torrent name")
         
         # 4. Use media filenames
+        logging.info("📄 Step 4: Parsing filenames...")
         identification = self._identify_from_filenames(torrent_match.files)
         if identification:
-            self.logger.info(f"Identified from filenames: {identification.title}")
+            self.logger.info(f"✅ Identified from filenames: '{identification.title}' ({identification.year})")
             return identification
+        logging.info("❌ No identification from filenames")
         
         # 5. Extract from media tags (placeholder for future implementation)
+        logging.info("🏷️ Step 5: Checking media tags...")
         identification = self._identify_from_media_tags(torrent_match.files)
         if identification:
-            self.logger.info(f"Identified from media tags: {identification.title}")
+            self.logger.info(f"✅ Identified from media tags: '{identification.title}' ({identification.year})")
             return identification
+        logging.info("❌ No identification from media tags")
         
         self.logger.warning(f"Failed to identify media for torrent: {torrent_match.name}")
         return None
@@ -399,17 +499,36 @@ class MediaIdentifier:
     
     def _identify_from_torrent_name(self, torrent_name: str) -> Optional[MediaIdentification]:
         """Extract identification from torrent name using guessit."""
-        return self._parse_name_with_guessit(torrent_name, IdentificationSource.TORRENT_NAME, confidence=0.8)
+        logging.info(f"🏷️ Identifying from torrent name: '{torrent_name}'")
+        result = self._parse_name_with_guessit(torrent_name, IdentificationSource.TORRENT_NAME, confidence=0.8)
+        if result:
+            logging.info(f"✅ Torrent name identification: '{result.title}' ({result.year}) - {result.media_type.value}")
+        else:
+            logging.warning(f"❌ Could not identify from torrent name: '{torrent_name}'")
+        return result
     
     def _identify_from_filenames(self, file_matches: List) -> Optional[MediaIdentification]:
         """Extract identification from media filenames using guessit."""
         if not file_matches:
             return None
         
-        # Try to find the main media file (largest video file)
-        video_files = [f for f in file_matches if self._is_video_file(f.torrent_path)]
-        if video_files:
-            main_file = max(video_files, key=lambda f: f.size)
+        # Detect media type based on file extensions
+        media_type = self._detect_media_type_from_files(file_matches)
+        
+        # Try to find the main media file based on type
+        if media_type in [MediaType.MOVIE, MediaType.TV_EPISODE]:
+            video_files = [f for f in file_matches if self._is_video_file(f.torrent_path)]
+            main_file = max(video_files, key=lambda f: f.size) if video_files else max(file_matches, key=lambda f: f.size)
+        elif media_type in [MediaType.BOOK, MediaType.AUDIOBOOK]:
+            book_files = [f for f in file_matches if self._is_book_file(f.torrent_path)]
+            audiobook_files = [f for f in file_matches if self._is_audiobook_file(f.torrent_path)]
+            
+            if media_type == MediaType.AUDIOBOOK and audiobook_files:
+                main_file = max(audiobook_files, key=lambda f: f.size)
+            elif media_type == MediaType.BOOK and book_files:
+                main_file = max(book_files, key=lambda f: f.size)
+            else:
+                main_file = max(file_matches, key=lambda f: f.size)
         else:
             main_file = max(file_matches, key=lambda f: f.size)
         
@@ -421,6 +540,10 @@ class MediaIdentifier:
         identification = self._parse_name_with_guessit(full_path, IdentificationSource.FILENAME, confidence=0.7)
         if not identification:
             identification = self._parse_name_with_guessit(filename, IdentificationSource.FILENAME, confidence=0.6)
+        
+        # Override media type if we detected it from files
+        if identification and media_type != MediaType.UNKNOWN:
+            identification.media_type = media_type
         
         return identification
     
@@ -546,6 +669,45 @@ class MediaIdentifier:
                            '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg', '.ogv'}
         return Path(filename).suffix.lower() in video_extensions
     
+    def _is_book_file(self, filename: str) -> bool:
+        """Check if filename is a book file."""
+        book_extensions = {'.epub', '.pdf', '.mobi', '.azw3', '.djvu', '.fb2', '.lit', '.pdb'}
+        return Path(filename).suffix.lower() in book_extensions
+    
+    def _is_audiobook_file(self, filename: str) -> bool:
+        """Check if filename is an audiobook file."""
+        audiobook_extensions = {'.m4b', '.mp3', '.m4a', '.flac', '.aac', '.ogg', '.wav', '.opus'}
+        # Additional heuristic: check for common audiobook patterns in filename
+        filename_lower = filename.lower()
+        audiobook_patterns = ['audiobook', 'unabridged', 'abridged', 'narrator', 'read by']
+        
+        # Must have audio extension AND audiobook indicators
+        has_audio_ext = Path(filename).suffix.lower() in audiobook_extensions
+        has_audiobook_pattern = any(pattern in filename_lower for pattern in audiobook_patterns)
+        
+        return has_audio_ext and has_audiobook_pattern
+    
+    def _detect_media_type_from_files(self, file_matches: List) -> MediaType:
+        """Detect media type based on file extensions in the torrent."""
+        if not file_matches:
+            return MediaType.UNKNOWN
+        
+        # Count different file types
+        video_count = sum(1 for f in file_matches if self._is_video_file(f.torrent_path))
+        book_count = sum(1 for f in file_matches if self._is_book_file(f.torrent_path))
+        audiobook_count = sum(1 for f in file_matches if self._is_audiobook_file(f.torrent_path))
+        
+        # Determine type based on what's most prevalent
+        if audiobook_count > 0:
+            return MediaType.AUDIOBOOK
+        elif book_count > 0:
+            return MediaType.BOOK
+        elif video_count > 0:
+            # Default to MOVIE, TV detection will be handled by guessit
+            return MediaType.MOVIE
+        
+        return MediaType.UNKNOWN
+    
     def _parse_name_for_identification_manual(self, name: str, source: IdentificationSource, 
                                      confidence: float = 0.7) -> Optional[MediaIdentification]:
         """Parse a name string to extract media identification."""
@@ -640,9 +802,10 @@ class MediaIdentifier:
 class MetadataProcessor:
     """Processes metadata for torrent matches and creates NFO files."""
     
-    def __init__(self, tmdb_client: Optional[TMDBClient] = None):
+    def __init__(self, tmdb_client: Optional[TMDBClient] = None, goodreads_client: Optional[GoodreadsClient] = None):
         self.identifier = MediaIdentifier()
         self.tmdb = tmdb_client or TMDBClient()
+        self.goodreads = goodreads_client or GoodreadsClient()
         self.logger = logging.getLogger(f"{__name__}.MetadataProcessor")
     
     def process_torrent_match(self, torrent_match: TorrentMatch, 
@@ -675,24 +838,35 @@ class MetadataProcessor:
                     processing_time=time.time() - start_time
                 )
             
-            # Step 2: Fetch metadata from TMDB
+            # Step 2: Fetch metadata from appropriate sources
             tmdb_data = None
+            goodreads_data = None
+            
             if identification.media_type in [MediaType.MOVIE, MediaType.TV_SHOW, MediaType.TV_EPISODE]:
                 tmdb_data = self._fetch_tmdb_data(identification)
+            elif identification.media_type in [MediaType.BOOK, MediaType.AUDIOBOOK]:
+                goodreads_data = self._fetch_goodreads_data(identification)
             
-            # Step 3: Create NFO file
+            # Step 3: Create NFO files
             nfo_written = False
             nfo_path = None
+            goodreads_nfo_path = None
             
             if tmdb_data:
                 nfo_path = self._create_nfo_from_tmdb(tmdb_data, identification, metadata_dir)
                 nfo_written = nfo_path is not None
             
+            if goodreads_data:
+                goodreads_nfo_path = self._create_nfo_from_goodreads(goodreads_data, identification, metadata_dir)
+                nfo_written = nfo_written or goodreads_nfo_path is not None
+            
             return MetadataResult(
                 identification=identification,
                 tmdb_data=tmdb_data,
+                goodreads_data=goodreads_data,
                 nfo_written=nfo_written,
                 nfo_path=nfo_path,
+                goodreads_nfo_path=goodreads_nfo_path,
                 processing_time=time.time() - start_time
             )
             
@@ -733,6 +907,20 @@ class MetadataProcessor:
                 return tv_data
         
         return None
+    
+    def _fetch_goodreads_data(self, identification: MediaIdentification) -> Optional[Dict[str, Any]]:
+        """Fetch data from Goodreads based on identification."""
+        # Extract author from additional_info if available
+        author = None
+        if identification.additional_info:
+            guessit_data = identification.additional_info.get('guessit_data', {})
+            # Look for author in various places
+            if 'author' in guessit_data:
+                author = guessit_data['author']
+        
+        # Use search_book_detailed for comprehensive metadata
+        book_data = self.goodreads.search_book_detailed(identification.title, author)
+        return book_data
     
     def _create_nfo_from_tmdb(self, tmdb_data: Dict[str, Any], 
                              identification: MediaIdentification,
@@ -905,6 +1093,200 @@ class MetadataProcessor:
         
         return episode
     
+    def _create_nfo_from_goodreads(self, goodreads_data: Dict[str, Any], 
+                                  identification: MediaIdentification,
+                                  metadata_dir: Path) -> Optional[Path]:
+        """Create NFO file from Goodreads data."""
+        try:
+            if identification.media_type == MediaType.BOOK:
+                root = self._create_book_nfo(goodreads_data)
+                nfo_filename = 'goodreads.nfo'
+            elif identification.media_type == MediaType.AUDIOBOOK:
+                root = self._create_audiobook_nfo(goodreads_data)
+                nfo_filename = 'goodreads.nfo'
+            else:
+                return None
+            
+            nfo_path = metadata_dir / nfo_filename
+            write_nfo_file(root, nfo_path)
+            self.logger.info(f"Created Goodreads NFO file: {nfo_path}")
+            return nfo_path
+            
+        except Exception as e:
+            self.logger.error(f"Error creating Goodreads NFO file: {e}")
+            return None
+    
+    def _create_book_nfo(self, goodreads_data: Dict[str, Any]) -> ET.Element:
+        """Create book NFO from Goodreads data."""
+        book = ET.Element('book')
+        
+        # Basic information
+        self._add_element(book, 'title', goodreads_data.get('title'))
+        
+        # Authors
+        authors = goodreads_data.get('authors', [])
+        if isinstance(authors, str):
+            self._add_element(book, 'author', authors)
+        elif isinstance(authors, list):
+            for author in authors:
+                if isinstance(author, dict):
+                    self._add_element(book, 'author', author.get('name'))
+                else:
+                    self._add_element(book, 'author', str(author))
+        
+        # Plot/description
+        self._add_element(book, 'plot', goodreads_data.get('description'))
+        
+        # Published date and year
+        if goodreads_data.get('published'):
+            self._add_element(book, 'published', goodreads_data['published'])
+            try:
+                # Extract year from published date
+                year = datetime.strptime(goodreads_data['published'], '%Y-%m-%d').year
+                self._add_element(book, 'year', str(year))
+            except (ValueError, TypeError):
+                # Try other date formats or just extract year
+                published = str(goodreads_data['published'])
+                year_match = re.search(r'\b(19|20)\d{2}\b', published)
+                if year_match:
+                    self._add_element(book, 'year', year_match.group())
+        
+        # Publisher
+        self._add_element(book, 'publisher', goodreads_data.get('publisher'))
+        
+        # Language
+        self._add_element(book, 'language', goodreads_data.get('language', 'en'))
+        
+        # Pages
+        if goodreads_data.get('pages'):
+            self._add_element(book, 'pages', str(goodreads_data['pages']))
+        
+        # Series information
+        if goodreads_data.get('series'):
+            self._add_element(book, 'series', goodreads_data['series'])
+        if goodreads_data.get('series_number'):
+            self._add_element(book, 'series_index', str(goodreads_data['series_number']))
+        
+        # Genres
+        genres = goodreads_data.get('genres', [])
+        if isinstance(genres, list):
+            for genre in genres:
+                if isinstance(genre, dict):
+                    self._add_element(book, 'genre', genre.get('name'))
+                else:
+                    self._add_element(book, 'genre', str(genre))
+        
+        # Ratings
+        if goodreads_data.get('rating'):
+            ratings = ET.SubElement(book, 'ratings')
+            rating = ET.SubElement(ratings, 'rating', name='goodreads', max='5', default='true')
+            self._add_element(rating, 'value', str(goodreads_data['rating']))
+            if goodreads_data.get('ratings_count'):
+                self._add_element(rating, 'votes', str(goodreads_data['ratings_count']))
+        
+        # Unique IDs
+        if goodreads_data.get('goodreads_id'):
+            uniqueid = ET.SubElement(book, 'uniqueid', type='goodreads', default='true')
+            uniqueid.text = str(goodreads_data['goodreads_id'])
+        
+        if goodreads_data.get('isbn'):
+            isbn_uniqueid = ET.SubElement(book, 'uniqueid', type='isbn')
+            isbn_uniqueid.text = goodreads_data['isbn']
+        
+        if goodreads_data.get('isbn13'):
+            isbn13_uniqueid = ET.SubElement(book, 'uniqueid', type='isbn13')
+            isbn13_uniqueid.text = goodreads_data['isbn13']
+        
+        # Art
+        if goodreads_data.get('image_url'):
+            art = ET.SubElement(book, 'art')
+            self._add_element(art, 'cover', goodreads_data['image_url'])
+        
+        return book
+    
+    def _create_audiobook_nfo(self, goodreads_data: Dict[str, Any]) -> ET.Element:
+        """Create audiobook NFO from Goodreads data."""
+        audiobook = ET.Element('audiobook')
+        
+        # Basic information (similar to book but with audiobook-specific elements)
+        self._add_element(audiobook, 'title', goodreads_data.get('title'))
+        
+        # Authors
+        authors = goodreads_data.get('authors', [])
+        if isinstance(authors, str):
+            self._add_element(audiobook, 'author', authors)
+        elif isinstance(authors, list):
+            for author in authors:
+                if isinstance(author, dict):
+                    self._add_element(audiobook, 'author', author.get('name'))
+                else:
+                    self._add_element(audiobook, 'author', str(author))
+        
+        # Narrator - from Goodreads reviews or description if available
+        # This might need to be extracted from description or other fields
+        # as Goodreads doesn't always have specific narrator information
+        
+        # Plot/description
+        self._add_element(audiobook, 'plot', goodreads_data.get('description'))
+        
+        # Published/released date
+        if goodreads_data.get('published'):
+            self._add_element(audiobook, 'released', goodreads_data['published'])
+            try:
+                year = datetime.strptime(goodreads_data['published'], '%Y-%m-%d').year
+                self._add_element(audiobook, 'year', str(year))
+            except (ValueError, TypeError):
+                published = str(goodreads_data['published'])
+                year_match = re.search(r'\b(19|20)\d{2}\b', published)
+                if year_match:
+                    self._add_element(audiobook, 'year', year_match.group())
+        
+        # Publisher
+        self._add_element(audiobook, 'publisher', goodreads_data.get('publisher'))
+        
+        # Series information
+        if goodreads_data.get('series'):
+            self._add_element(audiobook, 'series', goodreads_data['series'])
+        if goodreads_data.get('series_number'):
+            self._add_element(audiobook, 'series_index', str(goodreads_data['series_number']))
+        
+        # Genres
+        genres = goodreads_data.get('genres', [])
+        if isinstance(genres, list):
+            for genre in genres:
+                if isinstance(genre, dict):
+                    self._add_element(audiobook, 'genre', genre.get('name'))
+                else:
+                    self._add_element(audiobook, 'genre', str(genre))
+        
+        # Ratings
+        if goodreads_data.get('rating'):
+            ratings = ET.SubElement(audiobook, 'ratings')
+            rating = ET.SubElement(ratings, 'rating', name='goodreads', max='5', default='true')
+            self._add_element(rating, 'value', str(goodreads_data['rating']))
+            if goodreads_data.get('ratings_count'):
+                self._add_element(rating, 'votes', str(goodreads_data['ratings_count']))
+        
+        # Unique IDs
+        if goodreads_data.get('goodreads_id'):
+            uniqueid = ET.SubElement(audiobook, 'uniqueid', type='goodreads', default='true')
+            uniqueid.text = str(goodreads_data['goodreads_id'])
+        
+        if goodreads_data.get('isbn'):
+            isbn_uniqueid = ET.SubElement(audiobook, 'uniqueid', type='isbn')
+            isbn_uniqueid.text = goodreads_data['isbn']
+        
+        if goodreads_data.get('isbn13'):
+            isbn13_uniqueid = ET.SubElement(audiobook, 'uniqueid', type='isbn13')
+            isbn13_uniqueid.text = goodreads_data['isbn13']
+        
+        # Art
+        if goodreads_data.get('image_url'):
+            art = ET.SubElement(audiobook, 'art')
+            self._add_element(art, 'cover', goodreads_data['image_url'])
+        
+        return audiobook
+    
     def _add_element(self, parent: ET.Element, tag: str, text: Optional[str]) -> None:
         """Add element with text if text is not None/empty."""
         if text:
@@ -946,7 +1328,8 @@ def setup_metadata_logging(log_dir: Path) -> logging.Logger:
 
 def process_torrents_metadata(torrent_matches: List[TorrentMatch],
                              library_path: Path,
-                             tmdb_api_key: Optional[str] = None) -> List[MetadataResult]:
+                             tmdb_api_key: Optional[str] = None,
+                             goodreads_cache_expire: int = 3600) -> List[MetadataResult]:
     """
     Process metadata for multiple torrent matches.
     
@@ -954,12 +1337,14 @@ def process_torrents_metadata(torrent_matches: List[TorrentMatch],
         torrent_matches: List of TorrentMatch objects
         library_path: Base library directory
         tmdb_api_key: TMDB API key (optional, can use env var)
+        goodreads_cache_expire: Cache expiration time in seconds for Goodreads
         
     Returns:
         List of MetadataResult objects
     """
     tmdb_client = TMDBClient(tmdb_api_key)
-    processor = MetadataProcessor(tmdb_client)
+    goodreads_client = GoodreadsClient(cache_expire=goodreads_cache_expire)
+    processor = MetadataProcessor(tmdb_client, goodreads_client)
     
     results = []
     

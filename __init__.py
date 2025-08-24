@@ -4,10 +4,10 @@ MediaData - Media metadata management system.
 Main imports for the MediaData system:
 - MediaData: Main interface class
 - ProcessingStats: Statistics from processing runs
-- process_media_directory: Convenience function
+- process_media: Convenience function
 """
 
-from .mediadata import MediaData, ProcessingStats, process_media_directory
+from src.mediadata import MediaData, ProcessingStats, process_media
 
 # Also expose common classes from src modules
 from src import (
@@ -39,7 +39,7 @@ __all__ = [
     # Main interface
     'MediaData',
     'ProcessingStats', 
-    'process_media_directory',
+    'process_media',
     
     # Common utilities and classes
     'read_torrent_file',

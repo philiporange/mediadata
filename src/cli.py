@@ -38,15 +38,19 @@ except ImportError:
     Fore = Back = Style = _FakeColorama()
     COLORS_AVAILABLE = False
 
-from mediadata import (
+from .mediadata import (
     MediaData, 
     ProcessingStats, 
-    process_media_directory,
+    process_media
+)
+from . import (
     OrganizeAction,
     CollisionStrategy,
     TorrentScanner,
-    get_torrent_info
+    get_torrent_info,
+    scan_torrent_files
 )
+from .config.config import config
 
 
 class CLIProgressReporter:
@@ -145,27 +149,35 @@ def create_base_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Complete workflow - scan, organize, and fetch metadata
-  mediadata process /path/to/torrents /path/to/media /path/to/archive
+  # Complete workflow - scan folders for torrents and media, organize, and fetch metadata
+  mediadata process /path/to/downloads /path/to/media --archive /path/to/archive
+  
+  # Process multiple folders
+  mediadata process /downloads/movies /downloads/tv /media/unsorted
   
   # Just scan and match torrents to files
-  mediadata scan /path/to/torrents /path/to/media --verbose
+  mediadata scan /path/to/downloads /path/to/media --verbose
   
   # Organize matched torrents into library (dry run)
-  mediadata organize /path/to/torrents /path/to/media /path/to/archive --dry-run
+  mediadata organize /downloads /media --archive /archive --dry-run
   
   # Fetch metadata for existing library
-  mediadata metadata /path/to/archive --tmdb-key YOUR_API_KEY
+  mediadata metadata --archive /path/to/archive --tmdb-key YOUR_API_KEY
   
   # Check library status
-  mediadata status /path/to/archive
+  mediadata status --archive /path/to/archive
   
   # Get info about a specific torrent
   mediadata info /path/to/movie.torrent
 
 Environment Variables:
-  TMDB_API_KEY    TMDB API key for metadata fetching
-  MEDIADATA_ARCHIVE    Default archive directory
+  TMDB_API_KEY    TMDB API key for movies/TV metadata fetching
+  MEDIADATA_ARCHIVE    Default archive directory (defaults to ~/.mediadata/archive)
+
+Supported Media Types:
+  Movies/TV:      Uses TMDB for metadata (requires API key)
+  Books:          Uses Goodreads for metadata (no API key required)
+  Audiobooks:     Uses Goodreads for metadata (no API key required)
         """
     )
     
@@ -184,6 +196,8 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add common arguments to a parser."""
     parser.add_argument('--tmdb-key', type=str,
                        help='TMDB API key (or set TMDB_API_KEY env var)')
+    parser.add_argument('--goodreads-cache-expire', type=int, default=3600,
+                       help='Goodreads cache expiration time in seconds (default: 3600)')
     parser.add_argument('--max-workers', type=int, default=4,
                        help='Number of parallel workers (default: 4)')
 
@@ -207,9 +221,8 @@ def command_process(args: argparse.Namespace) -> int:
     reporter = CLIProgressReporter(args.verbose, not args.no_color)
     
     reporter.info(f"Starting complete MediaData processing workflow")
-    reporter.info(f"Torrents: {args.torrent_dir}")
-    reporter.info(f"Data: {args.data_dir}")  
-    reporter.info(f"Archive: {args.archive_dir}")
+    reporter.info(f"Folders to scan: {[str(f) for f in args.folders]}")
+    reporter.info(f"Archive: {args.archive}")
     
     if args.dry_run:
         reporter.warning("DRY RUN MODE - No files will be moved")
@@ -224,18 +237,18 @@ def command_process(args: argparse.Namespace) -> int:
         
         # Initialize MediaData
         with MediaData(
-            archive_dir=args.archive_dir,
+            archive_dir=args.archive,
             tmdb_api_key=args.tmdb_key,
+            goodreads_cache_expire=args.goodreads_cache_expire,
             verify_hashes=args.verify_hashes,
             organize_action=action,
             collision_strategy=collision,
             max_workers=args.max_workers
         ) as media:
             
-            # Execute complete workflow
-            stats = media.process_directory(
-                torrent_dir=args.torrent_dir,
-                data_dir=args.data_dir,
+            # Execute complete workflow using unified folder approach
+            stats = media.process(
+                folder_paths=args.folders,
                 dry_run=args.dry_run,
                 progress_callback=progress_callback
             )
@@ -263,36 +276,24 @@ def command_scan(args: argparse.Namespace) -> int:
     """Handle the 'scan' command - torrent matching only."""
     reporter = CLIProgressReporter(args.verbose, not args.no_color)
     
-    reporter.info(f"Scanning torrents and matching to data files")
-    reporter.info(f"Torrents: {args.torrent_dir}")
-    reporter.info(f"Data: {args.data_dir}")
+    reporter.info(f"Scanning folders for torrents and matching to media files")
+    reporter.info(f"Folders to scan: {[str(f) for f in args.folders]}")
     
     try:
         def progress_callback(message: str, percent: float):
             reporter.progress(message, percent)
         
-        # Initialize scanner
-        scanner = TorrentScanner(
+        # Initialize MediaData to use unified scanning
+        with MediaData(
             verify_hashes=args.verify_hashes,
             max_workers=args.max_workers
-        )
-        
-        # Find torrents
-        from src.utils import scan_torrent_files
-        torrent_files = scan_torrent_files(Path(args.torrent_dir))
-        
-        if not torrent_files:
-            reporter.warning("No torrent files found")
-            return 1
-        
-        reporter.info(f"Found {len(torrent_files)} torrent files")
-        
-        # Match torrents
-        matches = scanner.scan_directory(
-            Path(args.data_dir),
-            torrent_files,
-            progress_callback
-        )
+        ) as media:
+            
+            # Use unified folder scanning
+            matches = media.scan_and_match(
+                folder_paths=args.folders,
+                progress_callback=progress_callback
+            )
         
         # Analyze results
         complete_matches = [m for m in matches if m.complete]
@@ -347,17 +348,17 @@ def command_organize(args: argparse.Namespace) -> int:
         
         # Initialize MediaData
         with MediaData(
-            archive_dir=args.archive_dir,
+            archive_dir=args.archive,
+            goodreads_cache_expire=args.goodreads_cache_expire,
             organize_action=action,
             collision_strategy=collision,
             max_workers=args.max_workers
         ) as media:
             
-            # First scan and match
+            # First scan and match using unified approach
             matches = media.scan_and_match(
-                args.torrent_dir, 
-                args.data_dir,
-                progress_callback
+                folder_paths=args.folders,
+                progress_callback=progress_callback
             )
             
             complete_matches = [m for m in matches if m.complete]
@@ -407,13 +408,14 @@ def command_metadata(args: argparse.Namespace) -> int:
         reporter.error("TMDB API key required. Use --tmdb-key or set TMDB_API_KEY environment variable")
         return 1
     
-    reporter.info(f"Fetching metadata for library: {args.archive_dir}")
+    reporter.info(f"Fetching metadata for library: {args.archive}")
     
     try:
         # Initialize MediaData
         media = MediaData(
-            archive_dir=args.archive_dir,
+            archive_dir=args.archive,
             tmdb_api_key=args.tmdb_key,
+            goodreads_cache_expire=args.goodreads_cache_expire,
             max_workers=args.max_workers
         )
         
@@ -445,14 +447,17 @@ def command_status(args: argparse.Namespace) -> int:
     reporter = CLIProgressReporter(args.verbose, not args.no_color)
     
     try:
-        archive_path = Path(args.archive_dir)
+        archive_path = Path(args.archive)
         
         if not archive_path.exists():
             reporter.warning(f"Archive directory does not exist: {archive_path}")
             return 1
         
         # Initialize MediaData to get stats
-        media = MediaData(archive_dir=archive_path)
+        media = MediaData(
+            archive_dir=archive_path,
+            goodreads_cache_expire=getattr(args, 'goodreads_cache_expire', 3600)
+        )
         stats = media.get_library_stats()
         
         # Print library information
@@ -469,10 +474,11 @@ def command_status(args: argparse.Namespace) -> int:
             log_files = list(logs_dir.glob('*.log'))
             print(f"📋 Log Files: {len(log_files)}")
         
-        # TMDB configuration
+        # API configuration status
         tmdb_configured = bool(os.environ.get('TMDB_API_KEY'))
         tmdb_status = "✓ Configured" if tmdb_configured else "✗ Not configured"
         print(f"🎭 TMDB API: {tmdb_status}")
+        print(f"📚 Goodreads: ✓ Available (no API key required)")
         
         print()
         return 0
@@ -547,11 +553,10 @@ def main() -> int:
     # Process command - complete workflow
     process_parser = subparsers.add_parser(
         'process', 
-        help='Complete workflow: scan, organize, and fetch metadata'
+        help='Complete workflow: scan folders for torrents and media, organize, and fetch metadata'
     )
-    process_parser.add_argument('torrent_dir', type=Path, help='Directory containing torrent files')
-    process_parser.add_argument('data_dir', type=Path, help='Directory containing media files')
-    process_parser.add_argument('archive_dir', type=Path, help='Archive directory for organized library')
+    process_parser.add_argument('folders', type=Path, nargs='+', help='Directories to scan for torrents and media files')
+    process_parser.add_argument('--archive', type=Path, help='Archive directory for organized library (defaults to ~/.mediadata/archive)')
     process_parser.add_argument('--verify-hashes', action='store_true',
                                help='Verify file integrity using torrent hashes')
     add_common_args(process_parser)
@@ -560,10 +565,9 @@ def main() -> int:
     # Scan command - torrent matching only
     scan_parser = subparsers.add_parser(
         'scan',
-        help='Scan torrents and match to data files'
+        help='Scan folders for torrents and match to media files'
     )
-    scan_parser.add_argument('torrent_dir', type=Path, help='Directory containing torrent files')
-    scan_parser.add_argument('data_dir', type=Path, help='Directory containing media files')
+    scan_parser.add_argument('folders', type=Path, nargs='+', help='Directories to scan for torrents and media files')
     scan_parser.add_argument('--verify-hashes', action='store_true',
                             help='Verify file integrity using torrent hashes')
     add_common_args(scan_parser)
@@ -573,9 +577,8 @@ def main() -> int:
         'organize',
         help='Organize matched torrents into library structure'
     )
-    organize_parser.add_argument('torrent_dir', type=Path, help='Directory containing torrent files')
-    organize_parser.add_argument('data_dir', type=Path, help='Directory containing media files')  
-    organize_parser.add_argument('archive_dir', type=Path, help='Archive directory for organized library')
+    organize_parser.add_argument('folders', type=Path, nargs='+', help='Directories to scan for torrents and media files')
+    organize_parser.add_argument('--archive', type=Path, help='Archive directory for organized library (defaults to ~/.mediadata/archive)')
     add_common_args(organize_parser)
     add_organize_args(organize_parser)
     
@@ -584,7 +587,7 @@ def main() -> int:
         'metadata',
         help='Fetch metadata for library torrents'
     )
-    metadata_parser.add_argument('archive_dir', type=Path, help='Archive directory')
+    metadata_parser.add_argument('--archive', type=Path, help='Archive directory (defaults to ~/.mediadata/archive)')
     add_common_args(metadata_parser)
     
     # Status command - library information
@@ -592,7 +595,7 @@ def main() -> int:
         'status',
         help='Show library status and information'
     )
-    status_parser.add_argument('archive_dir', type=Path, help='Archive directory')
+    status_parser.add_argument('--archive', type=Path, help='Archive directory (defaults to ~/.mediadata/archive)')
     
     # Info command - torrent file information
     info_parser = subparsers.add_parser(
@@ -609,11 +612,13 @@ def main() -> int:
         parser.print_help()
         return 1
     
-    # Set default archive from environment if not provided
-    if hasattr(args, 'archive_dir') and not getattr(args, 'archive_dir', None):
+    # Set default archive from environment or config if not provided
+    if hasattr(args, 'archive') and args.archive is None:
         env_archive = os.environ.get('MEDIADATA_ARCHIVE')
         if env_archive:
-            args.archive_dir = Path(env_archive)
+            args.archive = Path(env_archive)
+        else:
+            args.archive = config.archive_path
     
     # Route to appropriate command handler
     command_handlers = {

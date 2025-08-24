@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .scan import TorrentMatch, FileMatch
 from .utils import create_library_structure
-from config.config import config
+from .config.config import config
 
 
 class OrganizeAction(Enum):

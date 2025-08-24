@@ -1,17 +1,24 @@
 """
 Default configuration settings for mediadata.
 
+Uses ~/.mediadata as the base directory for all settings and data storage.
 These defaults can be overridden via environment variables or .env file.
+
+Default paths:
+- Archive: ~/.mediadata/archive
+- Torrent watch directory: ~/.mediadata/torrents  
+- Temp directory: ~/.mediadata/temp
 """
 
 import os
 from pathlib import Path
 from typing import Dict, List
 
-# Base directories
-DEFAULT_LIBRARY_PATH = "/tmp/mediadata/library"
-DEFAULT_TORRENT_WATCH_DIR = "/tmp/mediadata/torrents"
-DEFAULT_TEMP_DIR = "/tmp/mediadata/temp"
+# Base directories - use ~/.mediadata as the default base
+_DEFAULT_BASE_DIR = Path.home() / ".mediadata"
+DEFAULT_ARCHIVE_PATH = _DEFAULT_BASE_DIR / "archive"
+DEFAULT_TORRENT_WATCH_DIR = _DEFAULT_BASE_DIR / "torrents"
+DEFAULT_TEMP_DIR = _DEFAULT_BASE_DIR / "temp"
 
 # Metadata sources and their priority (higher number = higher priority)
 METADATA_SOURCE_PRIORITY = {
@@ -62,7 +69,7 @@ class Config:
     """Configuration class that loads settings from environment and defaults."""
     
     def __init__(self):
-        self.library_path = Path(os.environ.get('MEDIADATA_LIBRARY_PATH', DEFAULT_LIBRARY_PATH))
+        self.archive_path = Path(os.environ.get('MEDIADATA_ARCHIVE', DEFAULT_ARCHIVE_PATH))
         self.torrent_watch_dir = Path(os.environ.get('MEDIADATA_TORRENT_WATCH_DIR', DEFAULT_TORRENT_WATCH_DIR))
         self.temp_dir = Path(os.environ.get('MEDIADATA_TEMP_DIR', DEFAULT_TEMP_DIR))
         
@@ -77,12 +84,12 @@ class Config:
     
     def _ensure_directories(self):
         """Create necessary directories if they don't exist."""
-        for path in [self.library_path, self.torrent_watch_dir, self.temp_dir]:
+        for path in [self.archive_path, self.torrent_watch_dir, self.temp_dir]:
             path.mkdir(parents=True, exist_ok=True)
     
     def get_torrent_dir(self, info_hash: str) -> Path:
         """Get the directory path for a specific torrent."""
-        return self.library_path / info_hash.lower()
+        return self.archive_path / info_hash.lower()
     
     def get_data_dir(self, info_hash: str) -> Path:
         """Get the data directory for a specific torrent."""
