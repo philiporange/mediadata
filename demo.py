@@ -29,7 +29,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from torrentp import TorrentDownloader
-from mediadata import MediaData, process_media_directory
+from src.mediadata import MediaData, process_media
 from src.organize import OrganizeAction
 from src.utils import get_torrent_info
 
@@ -283,9 +283,8 @@ def run_demo():
         else:
             print(f"  ⚠️  No TMDB_API_KEY found in environment - metadata fetching will be limited")
         
-        stats = process_media_directory(
-            torrent_dir=str(torrents_dir),
-            data_dir=str(media_dir), 
+        stats = process_media(
+            folder_paths=[str(torrents_dir), str(media_dir)], 
             archive_dir=str(archive_dir),
             tmdb_api_key=tmdb_api_key,
             dry_run=False,

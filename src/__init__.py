@@ -25,8 +25,7 @@ from .scan import (
     TorrentScanner,
     FileMatch,
     TorrentMatch,
-    create_scan_report,
-    scan_torrents_cli
+    create_scan_report
 )
 
 from .organize import (
@@ -69,7 +68,6 @@ __all__ = [
     'FileMatch',
     'TorrentMatch',
     'create_scan_report',
-    'scan_torrents_cli',
     
     # Organization
     'LibraryOrganizer',

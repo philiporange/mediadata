@@ -2,5 +2,6 @@ guessit>=3.8.0
 requests>=2.25.0
 colorama>=0.4.0
 python-dotenv>=0.19.0
+torrent-scanner>=1.0.0
 goodreads @ git+ssh://git@github.com/philiporange/goodreads.git
 googlebooks @ git+ssh://git@github.com/philiporange/googlebooks.git

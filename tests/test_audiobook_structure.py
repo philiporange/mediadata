@@ -17,7 +17,7 @@ sys.path.insert(0, str(project_root))
 # Load environment variables from .env file
 load_dotenv(project_root / '.env')
 
-from mediadata import MediaData, process_media_directory
+from mediadata import MediaData, process_media
 
 
 def test_audiobook_structure():

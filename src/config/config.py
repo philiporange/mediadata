@@ -20,6 +20,10 @@ DEFAULT_ARCHIVE_PATH = _DEFAULT_BASE_DIR / "archive"
 DEFAULT_TORRENT_WATCH_DIR = _DEFAULT_BASE_DIR / "torrents"
 DEFAULT_TEMP_DIR = _DEFAULT_BASE_DIR / "temp"
 
+# Torrent-scanner database paths
+DEFAULT_TORRENT_DB_PATH = _DEFAULT_BASE_DIR / "torrents.db"
+DEFAULT_REDIS_DB_PATH = _DEFAULT_BASE_DIR / "redis.db"
+
 # Metadata sources and their priority (higher number = higher priority)
 METADATA_SOURCE_PRIORITY = {
     'override': 100,
@@ -73,6 +77,15 @@ class Config:
         self.torrent_watch_dir = Path(os.environ.get('MEDIADATA_TORRENT_WATCH_DIR', DEFAULT_TORRENT_WATCH_DIR))
         self.temp_dir = Path(os.environ.get('MEDIADATA_TEMP_DIR', DEFAULT_TEMP_DIR))
         
+        # Torrent-scanner database paths
+        self.torrent_db_path = Path(os.environ.get('TORRENT_DB_PATH', DEFAULT_TORRENT_DB_PATH))
+        self.redis_db_path = Path(os.environ.get('REDIS_DB_PATH', DEFAULT_REDIS_DB_PATH))
+        
+        # Performance tuning
+        self.index_batch_size = int(os.environ.get('INDEX_BATCH_SIZE', '100'))
+        self.match_workers = int(os.environ.get('MATCH_WORKERS', '4'))
+        self.verify_pieces = os.environ.get('VERIFY_PIECES', 'false').lower() == 'true'
+        
         # Source priority (can be overridden)
         self.source_priority = METADATA_SOURCE_PRIORITY.copy()
         
@@ -86,6 +99,10 @@ class Config:
         """Create necessary directories if they don't exist."""
         for path in [self.archive_path, self.torrent_watch_dir, self.temp_dir]:
             path.mkdir(parents=True, exist_ok=True)
+        
+        # Ensure database paths exist
+        self.torrent_db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.redis_db_path.parent.mkdir(parents=True, exist_ok=True)
     
     def get_torrent_dir(self, info_hash: str) -> Path:
         """Get the directory path for a specific torrent."""

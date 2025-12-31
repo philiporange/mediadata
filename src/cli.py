@@ -544,6 +544,167 @@ def command_info(args: argparse.Namespace) -> int:
         return 1
 
 
+def command_db_stats(args: argparse.Namespace) -> int:
+    """Handle the 'db stats' command - show database statistics."""
+    reporter = CLIProgressReporter(args.verbose, not args.no_color)
+    
+    try:
+        # Initialize MediaData to access scanner
+        media = MediaData(archive_dir=args.archive)
+        stats = media.scanner.get_statistics()
+        
+        if args.json:
+            print(json.dumps(stats, indent=2))
+        else:
+            print()
+            reporter.info("Database Statistics")
+            print(f"📊 Total torrents: {stats['total_torrents']:,}")
+            print(f"✓ Matched torrents: {stats['matched_torrents']:,}")
+            print(f"📈 Total matches: {stats['total_matches']:,}")
+            print(f"📄 Single-file torrents: {stats['single_file_torrents']:,}")
+            print(f"📁 Multi-file torrents: {stats['multi_file_torrents']:,}")
+            print(f"💾 Total size: {ProcessingStats()._format_size(stats['total_size_bytes'])}")
+        
+        return 0
+        
+    except Exception as e:
+        reporter.error(f"Failed to get database statistics: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+def command_db_clean(args: argparse.Namespace) -> int:
+    """Handle the 'db clean' command - clean missing torrents."""
+    reporter = CLIProgressReporter(args.verbose, not args.no_color)
+    
+    try:
+        # Initialize MediaData to access scanner
+        media = MediaData(archive_dir=args.archive)
+        
+        if args.dry_run:
+            reporter.warning("DRY RUN MODE - Would remove missing torrents but not actually doing it")
+            # TODO: Implement dry run for cleanup
+            reporter.info("Dry run for cleanup not yet implemented in torrent-scanner")
+            return 0
+        
+        removed = media.cleanup_missing_torrents()
+        
+        if removed > 0:
+            reporter.success(f"Cleaned {removed} missing torrents from database")
+        else:
+            reporter.info("No missing torrents found to clean")
+        
+        return 0
+        
+    except Exception as e:
+        reporter.error(f"Failed to clean database: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+def command_db_export(args: argparse.Namespace) -> int:
+    """Handle the 'db export' command - export matches."""
+    reporter = CLIProgressReporter(args.verbose, not args.no_color)
+    
+    try:
+        # Initialize MediaData to access scanner
+        media = MediaData(archive_dir=args.archive)
+        torrents = media.list_all_torrents()
+        
+        # Prepare export data
+        if args.format == 'json':
+            export_data = {
+                'exported_at': datetime.now().isoformat(),
+                'total_torrents': len(torrents),
+                'torrents': torrents
+            }
+            
+            if args.output:
+                with open(args.output, 'w') as f:
+                    json.dump(export_data, f, indent=2)
+                reporter.success(f"Exported {len(torrents)} torrents to {args.output}")
+            else:
+                print(json.dumps(export_data, indent=2))
+                
+        elif args.format == 'csv':
+            import csv
+            import io
+            
+            if args.output:
+                output_file = open(args.output, 'w', newline='')
+            else:
+                output_file = sys.stdout
+            
+            writer = csv.DictWriter(output_file, fieldnames=['name', 'info_hash', 'total_size', 'files_count', 'matched'])
+            writer.writeheader()
+            
+            for torrent in torrents:
+                writer.writerow({
+                    'name': torrent.get('name', ''),
+                    'info_hash': torrent.get('info_hash', ''),
+                    'total_size': torrent.get('total_size', 0),
+                    'files_count': torrent.get('files_count', 0),
+                    'matched': torrent.get('matched', False)
+                })
+            
+            if args.output:
+                output_file.close()
+                reporter.success(f"Exported {len(torrents)} torrents to {args.output}")
+        
+        return 0
+        
+    except Exception as e:
+        reporter.error(f"Failed to export database: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+def command_query(args: argparse.Namespace) -> int:
+    """Handle the 'query' command - query torrent database."""
+    reporter = CLIProgressReporter(args.verbose, not args.no_color)
+    
+    try:
+        # Initialize MediaData to access scanner
+        media = MediaData(archive_dir=args.archive)
+        torrent_match = media.get_torrent_by_hash(args.info_hash)
+        
+        if not torrent_match:
+            reporter.error(f"Torrent {args.info_hash} not found in database")
+            return 1
+        
+        print()
+        reporter.info("Torrent Information")
+        print(f"🏷️  Name: {torrent_match.name}")
+        print(f"🔑 Info hash: {torrent_match.info_hash}")
+        print(f"✓ Complete: {'Yes' if torrent_match.complete else 'No'}")
+        print(f"📄 Files: {len(torrent_match.files)}")
+        
+        if args.show_files and torrent_match.files:
+            print(f"\n📋 Files:")
+            for i, f in enumerate(torrent_match.files, 1):
+                size_str = ProcessingStats()._format_size(f.size)
+                print(f"  {i:2d}. {f.torrent_path} ({size_str})")
+        
+        if args.show_locations and torrent_match.root_path:
+            print(f"\n📁 Data location: {torrent_match.root_path}")
+        
+        print()
+        return 0
+        
+    except Exception as e:
+        reporter.error(f"Failed to query torrent: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
 def main() -> int:
     """Main CLI entry point."""
     # Create main parser
@@ -604,6 +765,33 @@ def main() -> int:
     )
     info_parser.add_argument('torrent_file', type=Path, help='Path to torrent file')
     
+    # Database management commands
+    db_parser = subparsers.add_parser('db', help='Database management commands')
+    db_subparsers = db_parser.add_subparsers(dest='db_command', help='Database commands')
+    
+    # Stats command
+    stats_parser = db_subparsers.add_parser('stats', help='Show database statistics')
+    stats_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    stats_parser.add_argument('--archive', type=Path, help='Archive directory (defaults to ~/.mediadata/archive)')
+    
+    # Clean command
+    clean_parser = db_subparsers.add_parser('clean', help='Clean missing torrents')
+    clean_parser.add_argument('--dry-run', action='store_true', help='Show what would be cleaned without doing it')
+    clean_parser.add_argument('--archive', type=Path, help='Archive directory (defaults to ~/.mediadata/archive)')
+    
+    # Export command
+    export_parser = db_subparsers.add_parser('export', help='Export matches')
+    export_parser.add_argument('-o', '--output', help='Output file (defaults to stdout)')
+    export_parser.add_argument('--format', choices=['json', 'csv'], default='json', help='Output format (default: json)')
+    export_parser.add_argument('--archive', type=Path, help='Archive directory (defaults to ~/.mediadata/archive)')
+    
+    # Query command
+    query_parser = subparsers.add_parser('query', help='Query torrent database')
+    query_parser.add_argument('info_hash', help='Torrent info hash')
+    query_parser.add_argument('--show-files', action='store_true', help='Show files in torrent')
+    query_parser.add_argument('--show-locations', action='store_true', help='Show data locations')
+    query_parser.add_argument('--archive', type=Path, help='Archive directory (defaults to ~/.mediadata/archive)')
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -620,6 +808,18 @@ def main() -> int:
         else:
             args.archive = config.archive_path
     
+    # Handle database subcommands
+    if args.command == 'db' and hasattr(args, 'db_command'):
+        if args.db_command == 'stats':
+            return command_db_stats(args)
+        elif args.db_command == 'clean':
+            return command_db_clean(args)
+        elif args.db_command == 'export':
+            return command_db_export(args)
+        else:
+            db_parser.print_help()
+            return 1
+    
     # Route to appropriate command handler
     command_handlers = {
         'process': command_process,
@@ -628,6 +828,7 @@ def main() -> int:
         'metadata': command_metadata,
         'status': command_status,
         'info': command_info,
+        'query': command_query,
     }
     
     handler = command_handlers.get(args.command)

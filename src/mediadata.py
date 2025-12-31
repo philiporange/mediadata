@@ -144,10 +144,11 @@ class MediaData:
         # Ensure archive directory exists
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize components
+        # Initialize components - always use torrent-scanner backend
         self.scanner = TorrentScanner(
-            verify_hashes=self.verify_hashes,
-            max_workers=self.max_workers
+            db_path=config.torrent_db_path,
+            redis_path=config.redis_db_path,
+            verify_hashes=self.verify_hashes
         )
         
         self.organizer = LibraryOrganizer(
@@ -232,8 +233,7 @@ class MediaData:
                       folder_paths: List[Union[str, Path]],
                       progress_callback: Optional[Callable[[str, float], None]] = None) -> List[TorrentMatch]:
         """
-        Scan folders for torrents and match them to data files within the same folders.
-        Torrents are identified by .torrent extension.
+        Scan folders for torrents and match them to data files using torrent-scanner backend.
         
         Args:
             folder_paths: List of directories to scan for both torrents and media files
@@ -242,49 +242,25 @@ class MediaData:
         Returns:
             List of TorrentMatch objects
         """
-        self.logger.info(f"Starting unified folder scanning and matching for {len(folder_paths)} folders")
+        self.logger.info(f"Starting torrent-scanner based scanning and matching for {len(folder_paths)} folders")
         
-        # Collect all torrent files from all folders
-        all_torrent_files = []
-        for folder_path in folder_paths:
-            folder_torrents = self.scan_torrents(folder_path)
-            all_torrent_files.extend(folder_torrents)
-            self.logger.info(f"Found {len(folder_torrents)} torrents in {folder_path}")
+        # Convert to Path objects
+        paths = [Path(p) for p in folder_paths]
         
-        if not all_torrent_files:
-            self.logger.warning("No torrent files found in any folders")
-            return []
+        if progress_callback:
+            progress_callback("Indexing torrents and finding matches", 50)
         
-        self.logger.info(f"Total torrents found: {len(all_torrent_files)}")
-        
-        # Match torrents against all folders
-        all_matches = []
-        total_folders = len(folder_paths)
-        
-        for i, folder_path in enumerate(folder_paths):
-            if progress_callback:
-                base_percent = (i / total_folders) * 90  # Reserve 10% for final processing
-                progress_callback(f"Scanning folder {i+1}/{total_folders}: {folder_path}", base_percent)
-            
-            # Match all torrents against this folder
-            folder_matches = self.scanner.scan_directory(
-                Path(folder_path), 
-                all_torrent_files, 
-                lambda msg, pct=0: progress_callback(f"{msg} in {Path(folder_path).name}", base_percent + pct/10) if progress_callback else None
-            )
-            all_matches.extend(folder_matches)
-        
-        # Remove duplicate matches (same torrent matched in multiple folders)
-        unique_matches = self._deduplicate_matches(all_matches)
+        # Use the enhanced scanner which handles both indexing and matching
+        matches = self.scanner.scan_and_match(paths)
         
         # Log results
-        complete_matches = [m for m in unique_matches if m.complete]
-        self.logger.info(f"Unified matching complete: {len(complete_matches)}/{len(unique_matches)} torrents matched")
+        complete_matches = [m for m in matches if m.complete]
+        self.logger.info(f"Torrent-scanner matching complete: {len(complete_matches)}/{len(matches)} torrents matched")
         
         if progress_callback:
             progress_callback("Matching complete", 100)
         
-        return unique_matches
+        return matches
     
     def _deduplicate_matches(self, matches: List[TorrentMatch]) -> List[TorrentMatch]:
         """
@@ -497,11 +473,34 @@ class MediaData:
     
     def get_library_stats(self) -> Dict[str, Any]:
         """Get statistics about the current library."""
-        return self.organizer.get_library_stats()
+        organizer_stats = self.organizer.get_library_stats()
+        scanner_stats = self.scanner.get_statistics()
+        
+        # Combine stats from both sources
+        combined_stats = {
+            **organizer_stats,
+            'database_torrents': scanner_stats.get('total_torrents', 0),
+            'matched_torrents': scanner_stats.get('matched_torrents', 0),
+            'database_size_bytes': scanner_stats.get('total_size_bytes', 0)
+        }
+        
+        return combined_stats
     
     def check_torrent_exists(self, info_hash: str) -> Optional[Path]:
         """Check if a torrent already exists in the library."""
         return self.organizer.check_existing_torrent(info_hash)
+    
+    def get_torrent_by_hash(self, info_hash: str) -> Optional[TorrentMatch]:
+        """Retrieve torrent information from database."""
+        return self.scanner.get_torrent_by_hash(info_hash)
+    
+    def list_all_torrents(self, filter_type: str = 'all') -> List[Dict[str, Any]]:
+        """List torrents from database with filtering."""
+        return self.scanner.list_all_torrents(filter_type)
+    
+    def cleanup_missing_torrents(self) -> int:
+        """Remove torrents whose files no longer exist."""
+        return self.scanner.cleanup_missing()
     
     def get_torrent_info(self, torrent_path: Union[str, Path]) -> Dict[str, Any]:
         """Get information about a specific torrent file."""
