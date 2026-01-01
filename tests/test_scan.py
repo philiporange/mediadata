@@ -5,9 +5,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from src.scan import (
-    TorrentScanner, 
-    FileMatch, 
+from mediadata.scan import (
+    TorrentScanner,
+    FileMatch,
     TorrentMatch,
     create_scan_report,
     _format_size

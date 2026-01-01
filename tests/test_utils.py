@@ -4,8 +4,8 @@ import pytest
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from src.utils import (
-    BencodeDecoder, 
+from mediadata.utils import (
+    BencodeDecoder,
     _encode_bencode,
     extract_metadata_source,
     is_media_file,

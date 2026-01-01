@@ -18,7 +18,7 @@ sys.path.insert(0, str(project_root))
 # Load environment variables from .env file
 load_dotenv(project_root / '.env')
 
-from src.metadata import TMDBClient
+from mediadata.metadata import TMDBClient
 
 
 def test_tmdb_examples():

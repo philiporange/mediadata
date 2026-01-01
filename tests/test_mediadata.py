@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 from mediadata import MediaData, ProcessingStats, process_media
-from src.organize import OrganizeAction, CollisionStrategy
+from mediadata.organize import OrganizeAction, CollisionStrategy
 
 
 class TestProcessingStats:

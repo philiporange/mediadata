@@ -21,7 +21,7 @@ setup(
     install_requires=requirements,
     entry_points={
         'console_scripts': [
-            'mediadata=src.cli:main',
+            'mediadata=mediadata.cli:main',
         ],
     },
     classifiers=[

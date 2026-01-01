@@ -218,4 +218,5 @@ __marimo__/
 # Custom
 .catignore
 cat.md
+coverage.json
 *.sqlite

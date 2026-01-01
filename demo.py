@@ -29,9 +29,9 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from torrentp import TorrentDownloader
-from src.mediadata import MediaData, process_media
-from src.organize import OrganizeAction
-from src.utils import get_torrent_info
+from mediadata import MediaData, process_media
+from mediadata.organize import OrganizeAction
+from mediadata.utils import get_torrent_info
 
 
 def setup_logging():

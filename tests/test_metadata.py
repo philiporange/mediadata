@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from src.metadata import (
+from mediadata.metadata import (
     MediaType,
     IdentificationSource,
     MediaIdentification,
@@ -18,7 +18,7 @@ from src.metadata import (
     setup_metadata_logging,
     process_torrents_metadata
 )
-from src.scan import TorrentMatch, FileMatch
+from mediadata.scan import TorrentMatch, FileMatch
 
 
 class TestMediaIdentification:

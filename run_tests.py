@@ -42,7 +42,7 @@ def run_tests_with_coverage():
         # Run pytest with coverage
         cmd = [
             sys.executable, "-m", "pytest",
-            "--cov=src",
+            "--cov=mediadata",
             f"--cov-report=html:{htmlcov_dir}",
             "--cov-report=term-missing",
             "--cov-report=json",
@@ -84,7 +84,7 @@ def run_tests_with_coverage():
                         if files:
                             print("\n📋 Coverage by file:")
                             for filename, file_data in sorted(files.items()):
-                                if filename.startswith("src/"):
+                                if filename.startswith("mediadata/"):
                                     coverage_pct = file_data.get("summary", {}).get("percent_covered", 0)
                                     print(f"  {filename}: {coverage_pct:.1f}%")
                                     

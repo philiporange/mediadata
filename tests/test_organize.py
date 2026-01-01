@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from src.organize import (
+from mediadata.organize import (
     LibraryOrganizer,
     OrganizeAction,
     CollisionStrategy,
@@ -15,7 +15,7 @@ from src.organize import (
     create_organize_report,
     _format_size
 )
-from src.scan import TorrentMatch, FileMatch
+from mediadata.scan import TorrentMatch, FileMatch
 
 
 class TestLibraryOrganizer:

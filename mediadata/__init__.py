@@ -49,6 +49,12 @@ from .metadata import (
     process_torrents_metadata
 )
 
+from .mediadata import (
+    MediaData,
+    ProcessingStats,
+    process_media
+)
+
 __version__ = '0.1.0'
 __all__ = [
     # Core utilities
@@ -86,5 +92,10 @@ __all__ = [
     'TMDBClient',
     'MediaIdentifier',
     'MetadataProcessor',
-    'process_torrents_metadata'
+    'process_torrents_metadata',
+
+    # Main interface
+    'MediaData',
+    'ProcessingStats',
+    'process_media'
 ]

@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mediadata = "src.cli:main"
+mediadata = "mediadata.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/philiporange/mediadata"
@@ -44,7 +44,7 @@ Repository = "https://github.com/philiporange/mediadata"
 Issues = "https://github.com/philiporange/mediadata/issues"
 
 [tool.setuptools.packages.find]
-include = ["src*", "*.py"]
+include = ["mediadata*"]
 exclude = ["tests*"]
 
 [tool.pytest.ini_options]
@@ -55,7 +55,7 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
-source = ["src", "."]
+source = ["mediadata"]
 omit = ["tests/*", "setup.py"]
 
 [tool.coverage.report]
