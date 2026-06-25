@@ -1,23 +1,23 @@
 {
-  "name": "mediadata",
-  "short_description": "Media metadata management system that uses torrent files to create immutable hash-based libraries with Kodi/Jellyfin-compatible NFO metadata.",
-  "long_description": "MediaData is a sophisticated media library management system that organizes media collections using torrent files as the primary organizational structure. It creates immutable, collision-free directory structures based on torrent info hashes while automatically generating NFO metadata files compatible with media center applications like Kodi and Jellyfin. The system features torrent scanning and matching capabilities, automatic metadata fetching from TMDB (The Movie Database), hierarchical metadata identification from multiple sources (NFO files, torrent names, filenames), and comprehensive CLI tools for managing media libraries. It supports multiple media types including movies, TV shows, music, audiobooks, and books.",
+  "name": "MediaData",
+  "short_description": "Media metadata management system using torrent files as the primary organizational structure for immutable library archiving.",
+  "long_description": "MediaData is a comprehensive media metadata management system that uses torrent files as the foundational organizational structure. It creates immutable libraries with hash-based directories while generating Kodi/Jellyfin-compatible NFO metadata files. The system uses a unified folder approach where users provide directories to scan, and torrents are automatically identified by their .torrent extension and matched to media files. It supports multiple media types (movies, TV series, music, audiobooks, books, etc.) and integrates with external metadata sources like TMDB for automatic metadata fetching. The architecture emphasizes immutability through hash-based directory structures, hierarchical metadata identification from multiple sources, professional filename parsing using guessit, and comprehensive audit trails with JSON logging.",
   "keywords": [
     "media-management",
-    "torrent",
     "metadata",
-    "nfo",
-    "kodi",
-    "jellyfin",
-    "tmdb",
-    "media-center",
-    "library-organization",
-    "video-files",
-    "hash-based-storage",
+    "torrent-organization",
     "immutable-archive",
+    "nfo-generation",
+    "tmdb-integration",
+    "kodi-jellyfin",
+    "media-library",
+    "hash-based-organization",
     "metadata-fetching",
-    "xml-metadata",
-    "media-tagging"
+    "cli-tool",
+    "media-scanner",
+    "audiobook",
+    "tv-series",
+    "movie-database"
   ],
   "primary_language": "Python",
   "languages": [
@@ -27,61 +27,42 @@
     "guessit",
     "requests",
     "colorama",
+    "python-dotenv",
     "torrent-scanner",
-    "goodreads",
-    "google-books"
+    "goodreads"
   ],
   "modules": [
     {
-      "path": "src/mediadata.py",
-      "description": "Main orchestration class that coordinates all functionality: torrent scanning, library organization, metadata fetching, and complete processing workflows."
+      "path": "mediadata/__init__.py",
+      "description": "Package initialization exporting public API including scanning, organization, metadata processing, and main MediaData interface."
     },
     {
-      "path": "src/cli.py",
-      "description": "Command-line interface providing access to all MediaData operations with colored progress reporting and argument parsing."
+      "path": "mediadata/mediadata.py",
+      "description": "Main orchestrator class providing high-level interface for complete media processing workflows including scanning, organization, and metadata fetching."
     },
     {
-      "path": "src/scan.py",
-      "description": "Enhanced torrent scanning using torrent-scanner backend for persistent database storage and improved torrent matching to filesystem data."
+      "path": "mediadata/cli.py",
+      "description": "Command-line interface providing access to all MediaData functionality with support for process, scan, organize, metadata, status, and info commands."
     },
     {
-      "path": "src/organize.py",
-      "description": "Library organization module that arranges matched torrents into hash-based immutable directory structures with collision handling and multiple file operation strategies."
+      "path": "mediadata/scan.py",
+      "description": "Torrent scanning module integrating with torrent-scanner backend for persistent database storage and improved torrent matching capabilities."
     },
     {
-      "path": "src/metadata.py",
-      "description": "Metadata identification and processing system that fetches data from TMDB and other sources, generates NFO files, and manages hierarchical metadata extraction."
+      "path": "mediadata/organize.py",
+      "description": "Library organization functionality for moving torrents and data into hash-based directory structure with collision handling and dry-run support."
     },
     {
-      "path": "src/utils.py",
-      "description": "Core utility functions for torrent file parsing, bencode decoding, NFO file I/O, info hash calculation, and filesystem operations."
+      "path": "mediadata/metadata.py",
+      "description": "Metadata identification and import system with support for multiple external sources (TMDB, Goodreads, OpenLibrary) and hierarchical identification from NFO files and filenames."
     },
     {
-      "path": "src/config/config.py",
-      "description": "Configuration management module with environment variable support, default paths, media type definitions, and metadata source prioritization."
+      "path": "mediadata/utils.py",
+      "description": "Core utilities for torrent file processing including bencode decoding, info hash computation, NFO file parsing/writing, and filesystem management."
     },
     {
-      "path": "src/__init__.py",
-      "description": "Package initialization exposing primary classes and functions: MediaData, TorrentScanner, LibraryOrganizer, metadata processors, and utility functions."
+      "path": "mediadata/config/config.py",
+      "description": "Default configuration settings including media extensions, metadata source priorities, and default paths for archive and temporary directories."
     }
-  ],
-  "version": "0.1.0",
-  "license": "CC0-1.0",
-  "author": "Philip Orange",
-  "repository": "https://github.com/philiporange/mediadata",
-  "python_requires": ">=3.8",
-  "git": {
-    "is_repo": true,
-    "remote_url": "https://github.com/philiporange/mediadata.git",
-    "github_name": "philiporange/mediadata",
-    "default_branch": "master",
-    "last_commit": "2025-08-25T00:45:58+01:00"
-  },
-  "stats": {
-    "files": 36,
-    "lines_of_code": 6577,
-    "size_bytes": 1109836
-  },
-  "generated_at": "2025-12-06T19:48:09.385131",
-  "generator_version": "1.0.0"
+  ]
 }
